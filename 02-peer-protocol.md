@@ -35,8 +35,8 @@ operation, and closing.
     * [Channel Quiescence](#channel-quiescence)
     * [Channel Close](#channel-close)
       * [Closing Initiation: `shutdown`](#closing-initiation-shutdown)
-      * [Closing Negotiation: `closing_signed`](#closing-negotiation-closing_signed)
       * [Closing Negotiation: `closing_complete` and `closing_sig`](#closing-negotiation-closing_complete-and-closing_sig)
+      * [Legacy Closing Negotiation: `closing_signed`](#legacy-closing-negotiation-closing_signed)
     * [Normal Operation](#normal-operation)
       * [Forwarding HTLCs](#forwarding-htlcs)
       * [`cltv_expiry_delta` Selection](#cltv_expiry_delta-selection)
@@ -770,14 +770,12 @@ The sending node:
     - MAY include `upfront_shutdown_script`.
   - if it includes `open_channel_tlvs`:
     - MUST include `upfront_shutdown_script`.
-  - if `option_channel_type` is negotiated:
-    - MUST set `channel_type`
-  - if it includes `channel_type`:
-    - MUST set it to a defined type representing the type it wants.
-    - MUST use the smallest bitmap possible to represent the channel type.
-    - SHOULD NOT set it to a type containing a feature which was not negotiated.
-    - if `announce_channel` is `true` (not `0`):
-      - MUST NOT send `channel_type` with the `option_scid_alias` bit set.
+    - MUST set `channel_type`:
+      - MUST set it to a defined type representing the type it wants.
+      - MUST use the smallest bitmap possible to represent the channel type.
+      - SHOULD NOT set it to a type containing a feature which was not negotiated.
+      - if `announce_channel` is `true` (not `0`):
+        - MUST NOT send `channel_type` with the `option_scid_alias` bit set.
 
 The sending node SHOULD:
   - set `to_self_delay` sufficient to ensure the sender can irreversibly spend a commitment transaction output, in case of misbehavior by the receiver.
@@ -787,6 +785,8 @@ The sending node SHOULD:
 
 The receiving node MUST:
   - ignore undefined bits in `channel_flags`.
+  - if the message doesn't include a `channel_type`:
+    - fail the channel.
   - if the connection has been re-established after receiving a previous
  `open_channel`, BUT before receiving a `funding_created` message:
     - accept a new `open_channel` message.
@@ -795,7 +795,6 @@ The receiving node MUST:
     - fail the channel.
 
 The receiving node MAY fail the channel if:
-  - `option_channel_type` was negotiated but the message doesn't include a `channel_type`
   - `announce_channel` is `false` (`0`), yet it wishes to publicly announce the channel.
   - `funding_satoshis` is too small.
   - it considers `htlc_minimum_msat` too large.
@@ -816,10 +815,9 @@ are not valid secp256k1 pubkeys in compressed format.
   - `dust_limit_satoshis` is smaller than `354 satoshis` (see [BOLT 3](03-transactions.md#dust-limits)).
   - the funder's amount for the initial commitment transaction is not sufficient for full [fee payment](03-transactions.md#fee-payment).
   - both `to_local` and `to_remote` amounts for the initial commitment transaction are less than or equal to `channel_reserve_satoshis` (see [BOLT 3](03-transactions.md#commitment-transaction-outputs)).
-  - `funding_satoshis` is greater than or equal to 2^24 and the receiver does not support `option_support_large_channel`. 
-  - It supports `channel_type` and `channel_type` was set:
-    - if `type` is not suitable.
-    - if `type` includes `option_zeroconf` and it does not trust the sender to open an unconfirmed channel.
+  - `funding_satoshis` is greater than or equal to 2^24 and the receiver does not support `option_support_large_channel`.
+  - the `channel_type` is not suitable.
+  - the `channel_type` includes `option_zeroconf` and it does not trust the sender to open an unconfirmed channel.
 
 The receiving node MUST NOT:
   - consider funds received, using `push_msat`, to be received until the funding transaction has reached sufficient depth.
@@ -893,8 +891,7 @@ The sender:
     - SHOULD set `minimum_depth` to a number of blocks it considers reasonable to avoid double-spending of the funding transaction.
   - MUST set `channel_reserve_satoshis` greater than or equal to `dust_limit_satoshis` from the `open_channel` message.
   - MUST set `dust_limit_satoshis` less than or equal to `channel_reserve_satoshis` from the `open_channel` message.
-  - if `option_channel_type` was negotiated:
-    - MUST set `channel_type` to the `channel_type` from `open_channel`
+  - MUST set `channel_type` to the `channel_type` from `open_channel`.
 
 The receiver:
   - if `minimum_depth` is unreasonably large:
@@ -903,10 +900,10 @@ The receiver:
     - MUST fail the channel.
   - if `channel_reserve_satoshis` from the `open_channel` message is less than `dust_limit_satoshis`:
     - MUST fail the channel.
-  - if `channel_type` is set, and `channel_type` was set in `open_channel`, and they are not equal types:
+  - if the message doesn't include a `channel_type`:
     - MUST fail the channel.
-  - if `option_channel_type` was negotiated but the message doesn't include a `channel_type`:
-    - MAY fail the channel.
+  - if `channel_type` does not match the `channel_type` from `open_channel`:
+    - MUST fail the channel.
 
 Other fields have the same requirements as their counterparts in `open_channel`.
 
@@ -967,14 +964,7 @@ This message introduces the `channel_id` to identify the channel. It's derived f
 #### Requirements
 
 Both peers:
-  - if `channel_type` was present in both `open_channel` and `accept_channel`:
-    - This is the `channel_type` (they must be equal, required above)
-  - otherwise:
-    - if `option_anchors` was negotiated:
-      - the `channel_type` is `option_anchors` and `option_static_remotekey` (bits 22 and 12)
-    - otherwise:
-      - the `channel_type` is `option_static_remotekey` (bit 12)
-  - MUST use that `channel_type` for all commitment transactions.
+  - MUST use the negotiated `channel_type` for all commitment transactions.
 
 The sender MUST set:
   - `channel_id` by exclusive-OR of the `funding_txid` and the `funding_output_index` from the `funding_created` message.
@@ -990,16 +980,10 @@ The recipient:
 
 #### Rationale
 
-We decide on `option_static_remotekey` or `option_anchors` at this point
-when we first have to generate the commitment transaction. The feature
-bits that were communicated in the `init` message exchange for the current
-connection determine the channel commitment format for the total lifetime
-of the channel. Even if a later reconnection does not negotiate this
-parameter, this channel will continue to use `option_static_remotekey` or
-`option_anchors`; we don't support "downgrading".
-
-`option_anchors` is considered superior to `option_static_remotekey`,
-and the superior one is favored if more than one is negotiated.
+We generate the commitment transaction at this point, using the `channel_type`
+that was communicated in the `open_channel` and `accept_channel` messages.
+This `channel_type` determines the channel commitment format for the total
+lifetime of the channel.
 
 ### The `channel_ready` Message
 
@@ -1175,6 +1159,7 @@ If nodes have negotiated `option_dual_fund`:
     - MUST NOT send `open_channel`
 
 The sending node:
+  - MUST set `channel_type`
   - MUST set `funding_feerate_perkw` to the feerate for this transaction
   - If it requires the receiving node to only use confirmed inputs:
     - MUST set `require_confirmed_inputs`
@@ -1185,6 +1170,7 @@ The receiving node:
     - the `funding_feerate_perkw` is unacceptable
   - MUST fail the negotiation if:
     - `require_confirmed_inputs` is set but it cannot provide confirmed inputs
+    - `channel_type` is not set
 
 #### Rationale
 
@@ -1259,14 +1245,16 @@ additions.
 #### Requirements
 
 The accepting node:
-  - MUST use the `temporary_channel_id` of the `open_channel2` message
+  - MUST use the `temporary_channel_id` of the `open_channel2` message.
+  - MUST set `channel_type` to the `channel_type` from `open_channel2`.
   - MAY respond with a `funding_satoshis` value of zero.
   - If it requires the opening node to only use confirmed inputs:
-    - MUST set `require_confirmed_inputs`
+    - MUST set `require_confirmed_inputs`.
 
 The receiving node:
   - MUST fail the negotiation if:
-    - `require_confirmed_inputs` is set but it cannot provide confirmed inputs
+    - `require_confirmed_inputs` is set but it cannot provide confirmed inputs.
+    - `channel_type` is not set.
 
 #### Rationale
 
@@ -1331,7 +1319,8 @@ Upon receipt of consecutive `tx_complete`s, the receiving node:
 ### The `commitment_signed` Message
 
 This message is exchanged by both peers. It contains the signatures for
-the first commitment transaction.
+the first commitment transaction, which uses a format determined by the
+`channel_type` sent in `open_channel2` and `accept_channel2`.
 
 Rationale and Requirements are the same as listed below,
 for [`commitment_signed`](#committing-updates-so-far-commitment_signed) with the following additions.
@@ -1670,130 +1659,20 @@ of the receiving node to change the `scriptpubkey`.
 
 The `shutdown` response requirement implies that the node sends `commitment_signed` to commit any outstanding changes before replying; however, it could theoretically reconnect instead, which would simply erase all outstanding uncommitted changes.
 
-### Closing Negotiation: `closing_signed`
-
-Once shutdown is complete, the channel is empty of HTLCs, there are no commitments
-for which a revocation is owed, and all updates are included on both commitments,
-the final current commitment transactions will have no HTLCs, and closing fee
-negotiation begins.  The funder chooses a fee it thinks is fair, and
-signs the closing transaction with the `scriptpubkey` fields from the
-`shutdown` messages (along with its chosen fee) and sends the signature;
-the other node then replies similarly, using a fee it thinks is fair.  This
-exchange continues until both agree on the same fee or when one side fails
-the channel.
-
-In the modern method, the funder sends its permissible fee range, and the
-non-funder has to pick a fee in this range. If the non-funder chooses the same
-value, negotiation is complete after two messages, otherwise the funder will
-reply with the same value (completing after three messages).
-
-1. type: 39 (`closing_signed`)
-2. data:
-   * [`channel_id`:`channel_id`]
-   * [`u64`:`fee_satoshis`]
-   * [`signature`:`signature`]
-   * [`closing_signed_tlvs`:`tlvs`]
-
-1. `tlv_stream`: `closing_signed_tlvs`
-2. types:
-    1. type: 1 (`fee_range`)
-    2. data:
-        * [`u64`:`min_fee_satoshis`]
-        * [`u64`:`max_fee_satoshis`]
-
-#### Requirements
-
-The funding node:
-  - after `shutdown` has been received, AND no HTLCs remain in either commitment transaction:
-    - SHOULD send a `closing_signed` message.
-
-The sending node:
-  - SHOULD set the initial `fee_satoshis` according to its estimate of cost of
-  inclusion in a block.
-  - SHOULD set `fee_range` according to the minimum and maximum fees it is
-  prepared to pay for a close transaction.
-  - if it doesn't receive a `closing_signed` response after a reasonable amount of time:
-    - MUST fail the channel
-  - if it is not the funder:
-    - SHOULD set `max_fee_satoshis` to at least the `max_fee_satoshis` received
-    - SHOULD set `min_fee_satoshis` to a fairly low value
-  - MUST set `signature` to the Bitcoin signature of the close transaction,
-  as specified in [BOLT #3](03-transactions.md#closing-transaction).
-
-The receiving node:
-  - if the `signature` is not valid for either variant of closing transaction
-  specified in [BOLT #3](03-transactions.md#closing-transaction) OR non-compliant with LOW-S-standard rule<sup>[LOWS](https://github.com/bitcoin/bitcoin/pull/6769)</sup>:
-    - MUST send a `warning` and close the connection, or send an
-      `error` and fail the channel.
-  - if `fee_satoshis` is equal to its previously sent `fee_satoshis`:
-    - SHOULD sign and broadcast the final closing transaction.
-    - MAY close the connection.
-  - if `fee_satoshis` matches its previously sent `fee_range`:
-    - SHOULD use `fee_satoshis` to sign and broadcast the final closing transaction
-    - SHOULD reply with a `closing_signed` with the same `fee_satoshis` value if it is different from its previously sent `fee_satoshis`
-    - MAY close the connection.
-  - if the message contains a `fee_range`:
-    - if there is no overlap between that and its own `fee_range`:
-      - SHOULD send a warning
-      - MUST fail the channel if it doesn't receive a satisfying `fee_range` after a reasonable amount of time
-    - otherwise:
-      - if it is the funder:
-        - if `fee_satoshis` is not in the overlap between the sent and received `fee_range`:
-          - MUST fail the channel
-        - otherwise:
-          - MUST reply with the same `fee_satoshis`.
-      - otherwise (it is not the funder):
-        - if it has already sent a `closing_signed`:
-          - if `fee_satoshis` is not the same as the value it sent:
-            - MUST fail the channel
-        - otherwise:
-          - MUST propose a `fee_satoshis` in the overlap between received and (about-to-be) sent `fee_range`.
-  - otherwise, if `fee_satoshis` is not strictly between its last-sent `fee_satoshis`
-  and its previously-received `fee_satoshis`, UNLESS it has since reconnected:
-    - SHOULD send a `warning` and close the connection, or send an
-      `error` and fail the channel.
-  - otherwise, if the receiver agrees with the fee:
-    - SHOULD reply with a `closing_signed` with the same `fee_satoshis` value.
-  - otherwise:
-    - MUST propose a value "strictly between" the received `fee_satoshis`
-    and its previously-sent `fee_satoshis`.
-
-The receiving node:
-  - if one of the outputs in the closing transaction is below the dust limit for its `scriptpubkey` (see [BOLT 3](03-transactions.md#dust-limits)):
-    - MUST fail the channel
-
-#### Rationale
-
-When `fee_range` is not provided, the "strictly between" requirement ensures
-that forward progress is made, even if only by a single satoshi at a time.
-To avoid keeping state and to handle the corner case, where fees have shifted
-between disconnection and reconnection, negotiation restarts on reconnection.
-
-Note there is limited risk if the closing transaction is
-delayed, but it will be broadcast very soon; so there is usually no
-reason to pay a premium for rapid processing.
-
-Note that the non-funder is not paying the fee, so there is no reason for it
-to have a maximum feerate. It may want a minimum feerate, however, to ensure
-that the transaction propagates. It can always use CPFP later to speed up
-confirmation if necessary, so that minimum should be low.
-
-It may happen that the closing transaction doesn't meet bitcoin's default relay
-policies (e.g. when using a non-segwit shutdown script for an output below 546
-satoshis, which is possible if `dust_limit_satoshis` is below 546 satoshis).
-No funds are at risk when that happens, but the channel must be force-closed as
-the closing transaction will likely never reach miners.
-
 `OP_RETURN` is only standard if followed by PUSH opcodes, and the total script
 is 83 bytes or less. We are slightly stricter, to only allow a single PUSH, but
 there are two forms in script: one which pushes up to 75 bytes, and a longer
 one (`OP_PUSHDATA1`) which is needed for 76-80 bytes.
+
 
 ### Closing Negotiation: `closing_complete` and `closing_sig`
 
 Once shutdown is complete, the channel is empty of HTLCs, there are no commitments
 for which a revocation is owed, and all updates are included on both commitments,
 the final current commitment transactions will have no HTLCs.
+
+If `option_simple_close` is not negotiated, see [Legacy Closing
+Negotiation](#legacy-closing-negotiation-closing_signed) below.
 
 Each peer creates their own closing transaction where they pay the fee, and sends
 `closing_complete` to the other peer with the transaction details. The other peer
@@ -1846,6 +1725,10 @@ which allows increasing the fees and changing the output script.
 Note: the details and requirements for the transaction being signed are in [BOLT 3](03-transactions.md#closing-transaction).
 
 An output is *dust* if the amount is less than the [Bitcoin Core Dust Thresholds](03-transactions.md#dust-limits).
+
+Note: These requirements only apply if `option_simple_close` is
+negotiated, otherwise the requirements are in [Legacy Closing
+Negotiation](#legacy-closing-negotiation-closing_signed).
 
 Both nodes:
   - After a `shutdown` has been sent and received, AND no HTLCs remain in either commitment transaction:
@@ -1967,6 +1850,127 @@ minimal fee. If neither side proposes a fee which will relay, the negotiation ca
 or the final commitment transaction can be spent. In practice, the opener has an incentive to
 offer a reasonable closing fee, as they would pay the fee for the commitment transaction, which
 also costs more to spend.
+
+### Legacy Closing Negotiation: `closing_signed`
+
+Once shutdown is complete, the channel is empty of HTLCs, there are no commitments
+for which a revocation is owed, and all updates are included on both commitments,
+the final current commitment transactions will have no HTLCs, and closing fee
+negotiation begins: if `option_simple_close` is negotiated, the section above applies,
+otherwise this legacy section applies.
+
+The funder chooses a fee it thinks is fair, and
+signs the closing transaction with the `scriptpubkey` fields from the
+`shutdown` messages (along with its chosen fee) and sends the signature;
+the other node then replies similarly, using a fee it thinks is fair.  This
+exchange continues until both agree on the same fee or when one side fails
+the channel.
+
+In the modern method, the funder sends its permissible fee range, and the
+non-funder has to pick a fee in this range. If the non-funder chooses the same
+value, negotiation is complete after two messages, otherwise the funder will
+reply with the same value (completing after three messages).
+
+1. type: 39 (`closing_signed`)
+2. data:
+   * [`channel_id`:`channel_id`]
+   * [`u64`:`fee_satoshis`]
+   * [`signature`:`signature`]
+   * [`closing_signed_tlvs`:`tlvs`]
+
+1. `tlv_stream`: `closing_signed_tlvs`
+2. types:
+    1. type: 1 (`fee_range`)
+    2. data:
+        * [`u64`:`min_fee_satoshis`]
+        * [`u64`:`max_fee_satoshis`]
+
+#### Requirements
+
+Note: These requirements only apply if `option_simple_close` is NOT
+negotiated, otherwise the requirements [Closing Negotiation:
+`closing_complete` and `closing_sig`](#closing-negotiation-closing_complete-and-closing_sig) apply.
+
+The funding node:
+  - after `shutdown` has been received, AND no HTLCs remain in either commitment transaction:
+    - SHOULD send a `closing_signed` message.
+
+The sending node:
+  - SHOULD set the initial `fee_satoshis` according to its estimate of cost of
+  inclusion in a block.
+  - SHOULD set `fee_range` according to the minimum and maximum fees it is
+  prepared to pay for a close transaction.
+  - if it doesn't receive a `closing_signed` response after a reasonable amount of time:
+    - MUST fail the channel
+  - if it is not the funder:
+    - SHOULD set `max_fee_satoshis` to at least the `max_fee_satoshis` received
+    - SHOULD set `min_fee_satoshis` to a fairly low value
+  - MUST set `signature` to the Bitcoin signature of the close transaction,
+  as specified in [BOLT #3](03-transactions.md#closing-transaction).
+
+The receiving node:
+  - if the `signature` is not valid for either variant of closing transaction
+  specified in [BOLT #3](03-transactions.md#closing-transaction) OR non-compliant with LOW-S-standard rule<sup>[LOWS](https://github.com/bitcoin/bitcoin/pull/6769)</sup>:
+    - MUST send a `warning` and close the connection, or send an
+      `error` and fail the channel.
+  - if `fee_satoshis` is equal to its previously sent `fee_satoshis`:
+    - SHOULD sign and broadcast the final closing transaction.
+    - MAY close the connection.
+  - if `fee_satoshis` matches its previously sent `fee_range`:
+    - SHOULD use `fee_satoshis` to sign and broadcast the final closing transaction
+    - SHOULD reply with a `closing_signed` with the same `fee_satoshis` value if it is different from its previously sent `fee_satoshis`
+    - MAY close the connection.
+  - if the message contains a `fee_range`:
+    - if there is no overlap between that and its own `fee_range`:
+      - SHOULD send a warning
+      - MUST fail the channel if it doesn't receive a satisfying `fee_range` after a reasonable amount of time
+    - otherwise:
+      - if it is the funder:
+        - if `fee_satoshis` is not in the overlap between the sent and received `fee_range`:
+          - MUST fail the channel
+        - otherwise:
+          - MUST reply with the same `fee_satoshis`.
+      - otherwise (it is not the funder):
+        - if it has already sent a `closing_signed`:
+          - if `fee_satoshis` is not the same as the value it sent:
+            - MUST fail the channel
+        - otherwise:
+          - MUST propose a `fee_satoshis` in the overlap between received and (about-to-be) sent `fee_range`.
+  - otherwise, if `fee_satoshis` is not strictly between its last-sent `fee_satoshis`
+  and its previously-received `fee_satoshis`, UNLESS it has since reconnected:
+    - SHOULD send a `warning` and close the connection, or send an
+      `error` and fail the channel.
+  - otherwise, if the receiver agrees with the fee:
+    - SHOULD reply with a `closing_signed` with the same `fee_satoshis` value.
+  - otherwise:
+    - MUST propose a value "strictly between" the received `fee_satoshis`
+    and its previously-sent `fee_satoshis`.
+
+The receiving node:
+  - if one of the outputs in the closing transaction is below the dust limit for its `scriptpubkey` (see [BOLT 3](03-transactions.md#dust-limits)):
+    - MUST fail the channel
+
+#### Rationale
+
+When `fee_range` is not provided, the "strictly between" requirement ensures
+that forward progress is made, even if only by a single satoshi at a time.
+To avoid keeping state and to handle the corner case, where fees have shifted
+between disconnection and reconnection, negotiation restarts on reconnection.
+
+Note there is limited risk if the closing transaction is
+delayed, but it will be broadcast very soon; so there is usually no
+reason to pay a premium for rapid processing.
+
+Note that the non-funder is not paying the fee, so there is no reason for it
+to have a maximum feerate. It may want a minimum feerate, however, to ensure
+that the transaction propagates. It can always use CPFP later to speed up
+confirmation if necessary, so that minimum should be low.
+
+It may happen that the closing transaction doesn't meet bitcoin's default relay
+policies (e.g. when using a non-segwit shutdown script for an output below 546
+satoshis, which is possible if `dust_limit_satoshis` is below 546 satoshis).
+No funds are at risk when that happens, but the channel must be force-closed as
+the closing transaction will likely never reach miners.
 
 ## Normal Operation
 

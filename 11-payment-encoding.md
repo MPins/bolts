@@ -98,6 +98,9 @@ whatever is being offered in return.
 The `p` multiplier would allow to specify sub-millisatoshi amounts, which cannot be transferred on the network, since HTLCs are denominated in millisatoshis.
 Requiring a trailing `0` decimal ensures that the `amount` represents an integer number of millisatoshis.
 
+Note that non-largest multipliers have been encountered in the wild, and as
+such invoice parsers should handle them.
+
 # Data Part
 
 The data part of a Lightning invoice consists of multiple sections:
@@ -176,11 +179,11 @@ A writer:
         - SHOULD use a complete description of the purpose of the payment.
   - MAY include one `x` field.
     - if `x` is included:
-      - SHOULD use the minimum `data_length` possible.
+      - MUST use the minimum `data_length` possible, i.e. no leading 0 field-elements.
   - SHOULD include one `c` field (`min_final_cltv_expiry_delta`).
     - MUST set `c` to the minimum `cltv_expiry` it will accept for the last
     HTLC in the route.
-    - SHOULD use the minimum `data_length` possible.
+    - MUST use the minimum `data_length` possible, i.e. no leading 0 field-elements.
   - MAY include one `n` field. (Otherwise performing signature recovery is required)
     - MUST set `n` to the public key used to create the `signature`.
   - MAY include one or more `f` fields.
@@ -197,7 +200,8 @@ A writer:
         specified in [BOLT #7](07-routing-gossip.md#the-channel_update-message).
     - MAY include more than one `r` field to provide multiple routing options.
   - if `9` contains non-zero bits:
-    - SHOULD use the minimum `data_length` possible.
+    - MUST use the minimum `data_length` possible to encode the non-zero bits
+      with no 0 field-elements at the start.
   - otherwise:
     - MUST omit the `9` field altogether.
   - MUST pad field data to a multiple of 5 bits, using 0s.
@@ -205,8 +209,9 @@ A writer:
     - MUST specify the most-preferred field first, followed by less-preferred fields, in order.
 
 A reader:
-  - MUST skip over unknown fields, OR an `f` field with unknown `version`, OR  `p`, `h`, `s` or
-  `n` fields that do NOT have `data_length`s of 52, 52, 52 or 53, respectively.
+  - MUST skip over `f` fields that use an unknown `version`.
+  - MUST fail the payment if any mandatory field (`p`, `h`, `s`, `n`) does not have the correct length (52, 52, 52, 53).
+  - MUST fail the payment if neither a `d` field nor a `h` field is present, or if both are present.
   - if the `9` field contains unknown _odd_ bits that are non-zero:
     - MUST ignore the bit.
   - if the `9` field contains unknown _even_ bits that are non-zero:
@@ -216,29 +221,29 @@ A reader:
   description.
   - if a valid `n` field is provided:
     - MUST use the `n` field to validate the signature instead of performing signature recovery.
-  - if there is a valid `s` field:
-    - MUST use that as [`payment_secret`](04-onion-routing.md#tlv_payload-payload-format)
+  - if a valid `s` field is not provided:
+    - MUST fail the payment.
+  - otherwise:
+    - MUST use the `s` field as [`payment_secret`](04-onion-routing.md#tlv_payload-payload-format)
   - if the `c` field (`min_final_cltv_expiry_delta`) is not provided:
     - MUST use an expiry delta of at least 18 when making the payment
   - if an `m` field is provided:
     - MUST use that as [`payment_metadata`](04-onion-routing.md#tlv_payload-payload-format)
+  - if a `c`, `x`, or `9` field is provided which has a non-minimal `data_length`
+    (i.e. begins with 0 field elements):
+    - SHOULD treat the invoice as invalid.
+
+
 ### Rationale
 
 The type-and-length format allows future extensions to be backward
 compatible. `data_length` is always a multiple of 5 bits, for easy
-encoding and decoding. Readers also ignore fields of different length,
-for fields that are expected may change.
-
-The `p` field supports the current 256-bit payment hash, but future
-specs could add a new variant of different length: in which case,
-writers could support both old and new variants, and old readers would
-ignore the variant not the correct length.
+encoding and decoding.
 
 The `d` field allows inline descriptions, but may be insufficient for
 complex orders. Thus, the `h` field allows a summary: though the method
 by which the description is served is as-yet unspecified and will
-probably be transport dependent. The `h` format could change in the future,
-by changing the length, so readers ignore it if it's not 256 bits.
+probably be transport dependent.
 
 The `m` field allows metadata to be attached to the payment. This supports
 applications where the recipient doesn't keep any context for the payment.
@@ -343,7 +348,7 @@ A payer:
       understands for payment.
   - MAY use the sequence of channels, specified by the `r` field, to route to the payee.
   - SHOULD consider the fee amount and payment timeout before initiating payment.
-  - SHOULD use the first `p` field that it did NOT skip as the payment hash.
+  - SHOULD use the first `p` field as the payment hash.
 
 A payee:
   - after the `timestamp` plus `expiry` has passed:
@@ -357,6 +362,7 @@ https://github.com/rustyrussell/lightning-payencode
 
 NB: all the following examples are signed with `priv_key`=`e126f68f7eafcc8b74f54d269fe206be715000f94dac067d1c04a8ca3b2db734`.
 All invoices contain a `payment_secret`=`1111111111111111111111111111111111111111111111111111111111111111` unless otherwise noted.
+Signatures are deterministic and generated using RFC6979 (using HMAC-SHA256). Note that even though using a `low R` would save 1 byte in the DER-encoded signature (by avoiding the need for a leading zero byte when the most significant bit is set), it is not enforced in this specification.
 
 > ### Please make a donation of any amount using payment_hash 0001020304050607080900010203040506070809000102030405060708090102 to me @03e7156ae33b0a208d0744199163177e909e80176e55d97a2f221ede0f934dd9ad
 > lnbc1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaq9qrsgq357wnc5r2ueh7ck6q93dj32dlqnls087fxdwk8qakdyafkq3yap9us6v52vjjsrvywa6rt52cm9r9zqt8r2t7mlcwspyetp5h2tztugp9lfyql
@@ -807,6 +813,9 @@ Breakdown:
 
 > ### Invalid sub-millisatoshi precision.
 > lnbc2500000001p1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpusp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9qrsgq0lzc236j96a95uv0m3umg28gclm5lqxtqqwk32uuk4k6673k6n5kfvx3d2h8s295fad45fdhmusm8sjudfhlf6dcsxmfvkeywmjdkxcp99202x
+
+> ### Missing required `s` field.
+> lnbc20m1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqs9qrsgq7ea976txfraylvgzuxs8kgcw23ezlrszfnh8r6qtfpr6cxga50aj6txm9rxrydzd06dfeawfk6swupvz4erwnyutnjq7x39ymw6j38gp49qdkj
 
 # Authors
 
