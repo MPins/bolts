@@ -39,7 +39,7 @@ The Context column decodes as follows:
 | 8/9   | `var_onion_optin`                 | ASSUMED                                                   |          |                             |                                                                       |
 | 10/11 | `gossip_queries_ex`               | Gossip queries can include additional information         | IN       |                             | [BOLT #7][bolt07-query]                                               |
 | 12/13 | `option_static_remotekey`         | ASSUMED                                                   |          |                             |                                                                       |
-| 14/15 | `payment_secret`                  | ASSUMED                                                   | IN9      |                             | [Routing Onion Specification][bolt04]                                 |
+| 14/15 | `payment_secret`                  | ASSUMED                                                   |          |                             | [Routing Onion Specification][bolt04]                                 |
 | 16/17 | `basic_mpp`                       | Node can receive basic multi-part payments                | IN9      | `payment_secret`            | [BOLT #4][bolt04-mpp]                                                 |
 | 18/19 | `option_support_large_channel`    | Can create large channels                                 | IN       |                             | [BOLT #2](02-peer-protocol.md#the-open_channel-message)               |
 | 22/23 | `option_anchors`                  | Anchor commitment type with zero fee HTLC transactions    | INT      |                             | [BOLT #3][bolt03-htlc-tx], [lightning-dev][ml-sighash-single-harmful] |
@@ -47,13 +47,16 @@ The Context column decodes as follows:
 | 26/27 | `option_shutdown_anysegwit`       | Future segwit versions allowed in `shutdown`              | IN       |                             | [BOLT #2][bolt02-shutdown]                                            |
 | 28/29 | `option_dual_fund`                | Use v2 of channel open, enables dual funding              | IN       |                             | [BOLT #2](02-peer-protocol.md)                                        |
 | 34/35 | `option_quiesce`                  | Support for `stfu` message                                | IN       |                             | [BOLT #2][bolt02-quiescence]                                          |
+| 36/37 | `option_attribution_data`      | Can generate/relay attribution data in `update_fail_htlc` and `update_fulfill_htlc`  | IN9      |                   | [BOLT #4][bolt04-attribution-data]   |
 | 38/39 | `option_onion_messages`           | Can forward onion messages                                | IN       |                             | [BOLT #7](04-onion-routing.md#onion-messages)                         |
+| 40/41 | `zero_fee_commitments`            | Zero-fee commitment and HTLC transactions                 | IN       | `option_channel_type`       | [BOLT #3][bolt03-shared-anchor]                                       |
 | 42/43 | `option_provide_storage`          | Can store other nodes' encrypted backup data              | IN       |                             | [BOLT #1](01-messaging.md#peer-storage)                               |
-| 44/45 | `option_channel_type`             | ASSUMED                                                   | IN       |                             |                                                                       |
+| 44/45 | `option_channel_type`             | ASSUMED                                                   |          |                             |                                                                       |
 | 46/47 | `option_scid_alias`               | Supply channel aliases for routing                        | INT      |                             | [BOLT #2][bolt02-channel-ready]                                       |
 | 48/49 | `option_payment_metadata`         | Payment metadata in tlv record                            | 9        |                             | [BOLT #11](11-payment-encoding.md#tagged-fields)                      |
 | 50/51 | `option_zeroconf`                 | Understands zeroconf channel types                        | INT      | `option_scid_alias`         | [BOLT #2][bolt02-channel-ready]                                       |
 | 60/61 | `option_simple_close`             | Simplified closing negotiation                            | IN       | `option_shutdown_anysegwit` | [BOLT #2][bolt02-simple-close]                                        |
+| 62/63 | `option_splice`                   | Allows replacing the funding transaction with a new one   | IN       |                             | [BOLT #2](02-peer-protocol.md#channel-splicing)                       |
 
 ## Requirements
 
@@ -100,12 +103,14 @@ This work is licensed under a [Creative Commons Attribution 4.0 International Li
 [bolt02-open]: 02-peer-protocol.md#the-open_channel-message
 [bolt02-simple-close]: 02-peer-protocol.md#closing-negotiation-closing_complete-and-closing_sig
 [bolt03-htlc-tx]: 03-transactions.md#htlc-timeout-and-htlc-success-transactions
+[bolt03-shared-anchor]: 03-transactions.md#shared_anchor-output-zero_fee_commitments
 [bolt02-shutdown]: 02-peer-protocol.md#closing-initiation-shutdown
 [bolt02-quiescence]: 02-peer-protocol.md#channel-quiescence
 [bolt02-channel-ready]: 02-peer-protocol.md#the-channel_ready-message
-[bolt04]: 04-onion-routing.md
+[bolt04-attribution-data]: 04-onion-routing.md#returning-errors
 [bolt07-sync]: 07-routing-gossip.md#initial-sync
 [bolt07-query]: 07-routing-gossip.md#query-messages
 [bolt04-mpp]: 04-onion-routing.md#basic-multi-part-payments
 [bolt04-route-blinding]: 04-onion-routing.md#route-blinding
+[bolt04-attributable-errors]: 04-onion-routing.md
 [ml-sighash-single-harmful]: https://lists.linuxfoundation.org/pipermail/lightning-dev/2020-September/002796.html
